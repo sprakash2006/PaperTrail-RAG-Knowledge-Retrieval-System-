@@ -1,0 +1,212 @@
+' ============================================================================
+'  PaperTrail — Architecture (PlantUML)
+'  Render at https://www.plantuml.com/plantuml  or the VS Code PlantUML ext.
+'  Contains 3 diagrams: Component, RAG-query Sequence, ER (data model).
+' ============================================================================
+
+' ----------------------------------------------------------------------------
+' 1) COMPONENT / DEPLOYMENT DIAGRAM
+' ----------------------------------------------------------------------------
+@startuml PaperTrail_Components
+title PaperTrail — Component Architecture
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultTextAlignment center
+
+actor "User\n(Director / Manager / Employee)" as User
+actor "Customer\n(public ticket form)" as Customer
+
+package "Frontend — React 19 + Vite (served by nginx)" {
+  [SPA Pages\n(Auth, Chat, Upload, Email,\nTickets, Dashboard)] as SPA
+  [api.js client] as ApiClient
+  [supabase-js\n(Auth)] as SupaJs
+}
+
+package "Backend — FastAPI" {
+  package "Routers (/api)" {
+    [auth] as RAuth
+    [documents] as RDocs
+    [chat] as RChat
+    [emails] as REmail
+    [tickets] as RTickets
+  }
+  package "Services" {
+    [rag_service] as SRag
+    [embedding_service] as SEmbed
+    [supabase_client] as SSupa
+  }
+  package "Core RAG Engine (engine/)" {
+    [FileIngestor] as Ingestor
+    [ConflictDetector] as Conflict
+    [EmailFetcher] as Email
+  }
+}
+
+cloud "Supabase" {
+  database "Postgres + pgvector\n(HNSW)\nmatch_chunks() RPC\nRow-Level Security" as PG
+  [Auth (JWT)] as SAuth
+  [Storage bucket\n'documents'] as SStore
+}
+
+cloud "OpenAI API" {
+  [gpt-4o\n(answers)] as GPT
+  [gpt-4o-mini\n(conflicts + email draft)] as GPTmini
+}
+
+node "SentenceTransformer\nall-MiniLM-L6-v2 (384d)" as ST
+node "IMAP Mailbox\n(Gmail, …)" as IMAP
+
+User --> SPA
+Customer --> SPA
+SPA --> ApiClient
+SPA --> SupaJs
+SupaJs --> SAuth : login / signup (JWT)
+ApiClient --> RAuth : Bearer JWT, /api/*
+ApiClient --> RDocs
+ApiClient --> RChat
+ApiClient --> REmail
+ApiClient --> RTickets
+
+RDocs --> Ingestor : extract + chunk
+RChat --> SRag : RAG query
+RTickets --> SRag : resolve ticket
+REmail --> Email : poll inbox
+SRag --> Conflict : detect conflicts
+SRag --> SEmbed
+Email --> Ingestor
+Email --> IMAP : IMAP UNSEEN
+
+SEmbed --> ST : encode (384d)
+SRag --> PG : match_chunks(embedding, org, user)
+SRag --> GPT : grounded answer
+Conflict --> GPTmini
+RTickets --> GPTmini : format customer email
+RDocs --> SStore : store original file
+SSupa --> PG
+RAuth --> SAuth
+@enduml
+
+
+' ----------------------------------------------------------------------------
+' 2) SEQUENCE DIAGRAM — the core RAG query
+' ----------------------------------------------------------------------------
+@startuml PaperTrail_RAG_Query
+title PaperTrail — Retrieval-Augmented Q&A flow
+skinparam shadowing false
+autonumber
+
+actor User
+participant "Frontend\n(api.js)" as FE
+participant "FastAPI\n/api/chat/query" as API
+participant "embedding_service" as EMB
+participant "SentenceTransformer" as ST
+database "Supabase\nmatch_chunks()" as DB
+participant "ConflictDetector" as CD
+participant "OpenAI gpt-4o-mini" as MINI
+participant "OpenAI gpt-4o" as GPT
+
+User -> FE : ask question
+FE -> API : POST /query (Bearer JWT)
+API -> EMB : embed(question)
+EMB -> ST : encode → vector(384)
+ST --> EMB : embedding
+API -> DB : match_chunks(embedding, org_id, user_id)
+note right of DB : Cosine search + RBAC\n(shared / owner / role / subordinates)\nin ONE query
+DB --> API : top-K accessible chunks
+API -> API : detect duplicates (heuristic)
+API -> CD : cross-source chunk pairs
+CD -> MINI : semantic conflict check
+MINI --> CD : conflicts
+CD --> API : conflicts (+ auto-resolution:\nrecency → source-type priority)
+API -> GPT : grounded context + history\n(anti-hallucination prompt)
+GPT --> API : 4-section answer\n(Answer / Quality / Sources / Reasoning)
+API -> DB : persist messages (sources + analysis JSONB)
+API --> FE : answer + sources + conflicts
+FE --> User : render answer + citation cards
+@enduml
+
+
+' ----------------------------------------------------------------------------
+' 3) ENTITY-RELATIONSHIP — data model
+' ----------------------------------------------------------------------------
+@startuml PaperTrail_ERD
+title PaperTrail — Data Model (Supabase / Postgres)
+skinparam linetype ortho
+hide circle
+
+entity organizations {
+  *id : uuid
+  --
+  name
+  slug
+}
+entity profiles {
+  *id : uuid <<auth.users>>
+  --
+  org_id <<FK>>
+  role : director|manager|employee
+  reports_to <<FK self>>
+}
+entity documents {
+  *id : uuid
+  --
+  org_id <<FK>>
+  owner_id <<FK>>
+  visibility : shared|private
+  status : processing|ready|failed
+}
+entity chunks {
+  *id : uuid
+  --
+  document_id <<FK>>
+  embedding : vector(384)
+  page / line / section / date
+}
+entity conversations {
+  *id : uuid
+  --
+  user_id <<FK>>
+}
+entity messages {
+  *id : uuid
+  --
+  conversation_id <<FK>>
+  role / content
+  sources : jsonb
+  analysis : jsonb
+}
+entity email_configs {
+  *id : uuid
+  --
+  user_id <<FK, unique>>
+}
+entity tickets {
+  *id : uuid
+  --
+  org_id <<FK>>
+  status : open|in_progress|resolved|closed
+}
+entity ticket_notes {
+  *id : uuid
+  --
+  ticket_id <<FK>>
+}
+entity audit_log {
+  *id : uuid
+  --
+  org_id <<FK>>
+  action
+}
+
+organizations ||--o{ profiles
+profiles ||--o{ profiles : reports_to
+organizations ||--o{ documents
+profiles ||--o{ documents : owner
+documents ||--o{ chunks
+profiles ||--o{ conversations
+conversations ||--o{ messages
+profiles ||--|| email_configs
+organizations ||--o{ tickets
+tickets ||--o{ ticket_notes
+organizations ||--o{ audit_log
+@enduml

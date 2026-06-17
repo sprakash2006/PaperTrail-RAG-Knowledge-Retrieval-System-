@@ -34,7 +34,6 @@ ticketing** workflow that drafts and sends resolution emails from the knowledge 
   - [14. Audit Logging](#14-audit-logging)
   - [15. Authentication & User Management](#15-authentication--user-management)
   - [16. Document Storage](#16-document-storage)
-  - [17. Streamlit Prototype](#17-streamlit-prototype)
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Database Schema](#-database-schema)
@@ -42,22 +41,25 @@ ticketing** workflow that drafts and sends resolution emails from the knowledge 
 - [Installation & Setup](#-installation--setup)
 - [Environment Variables](#-environment-variables)
 - [Running the Application](#-running-the-application)
+- [Deployment (Hostable Components)](#-deployment-hostable-components)
 - [Demo Data](#-demo-data)
 
 ---
 
 ## 🌐 System Overview
 
-The repository ships **two complementary deployments** that share the same core RAG
-engine (`rag_ingestor.py`, `conflict_detector.py`, `email_fetcher.py`):
+The platform ships as **three hostable components**:
 
-| Deployment | Stack | Vector Store | Use Case |
-|------------|-------|--------------|----------|
-| **Production app** | FastAPI + React/Vite + Supabase | Supabase **pgvector** (HNSW) | Multi-tenant, persistent, auth-gated platform |
-| **Streamlit prototype** | Streamlit single-file app | **ChromaDB** (local, persisted) | Rapid demo / single-user exploration |
+| Component | Stack | Responsibility |
+|-----------|-------|----------------|
+| **Backend** | FastAPI + the core RAG engine | API, ingestion, retrieval, conflict detection, embeddings |
+| **Frontend** | React 19 + Vite (static SPA) | Auth, chat, upload, email, tickets, dashboard UI |
+| **Supabase** | Postgres + pgvector + Auth + Storage | Persistence, vector search, RBAC, file storage |
 
-Both share the identical document-processing pipeline and the same structured,
-anti-hallucination answer format.
+The **core RAG engine** (`backend/engine/` — `rag_ingestor.py`, `conflict_detector.py`,
+`email_fetcher.py`) is storage-agnostic and lives inside the backend; the FastAPI
+services wire it to Supabase **pgvector** (HNSW) for multi-tenant, persistent,
+auth-gated retrieval.
 
 ---
 
@@ -138,19 +140,16 @@ Every chunk carries metadata: `page`, `line`/`row`, `section`, and `source_date`
 ### 3. Vector Embeddings & Semantic Search
 - Embeddings generated locally with **`sentence-transformers` `all-MiniLM-L6-v2`**
   (384 dimensions) — no embedding API cost.
-- **Production:** vectors stored in Postgres via the **pgvector** extension, indexed
-  with **HNSW** (`m=16, ef_construction=64`) using cosine distance. Retrieval is done
-  through the `match_chunks` SQL function, which combines similarity search **and**
-  access control in a single query.
-- **Prototype:** vectors stored in **ChromaDB** (`hnsw:space = cosine`), persisted to a
-  local `rag_store/` directory.
+- Vectors are stored in Postgres via the **pgvector** extension, indexed with **HNSW**
+  (`m=16, ef_construction=64`) using cosine distance. Retrieval is done through the
+  `match_chunks` SQL function, which combines similarity search **and** access control
+  in a single query.
 - A configurable similarity threshold (`MATCH_THRESHOLD = 0.3`) filters out weak
   matches; `TOP_K` controls how many chunks are retrieved.
 
 ### 4. Retrieval-Augmented Q&A
 For each question:
-1. The query is embedded and the top-K most similar chunks are retrieved (30 candidates
-   in the prototype, narrowed to 15).
+1. The query is embedded and the top-K most similar chunks are retrieved (`TOP_K = 15`).
 2. Retrieved chunks are filtered by the asking user's access rights.
 3. Chunks are analyzed for duplicates and conflicts.
 4. A grounded context block (with source/page/line/section/date tags) is assembled.
@@ -207,10 +206,9 @@ Three roles with hierarchical document visibility:
 | **Employee** | Shared docs + own private docs only |
 
 The org hierarchy is modeled via a self-referencing `reports_to` field. Subordinates
-are resolved **recursively** — in production via the `get_all_subordinates` SQL
-function, and in the prototype via `org_model.all_subordinates`. Access control is
-enforced at **three** levels: the `match_chunks` retrieval query, the document-listing
-service, and Supabase **Row-Level Security** policies.
+are resolved **recursively** via the `get_all_subordinates` SQL function. Access control
+is enforced at **three** levels: the `match_chunks` retrieval query, the
+document-listing service, and Supabase **Row-Level Security** policies.
 
 ### 9. Shared vs. Private Documents
 Every document is either:
@@ -292,15 +290,6 @@ Original uploaded files are stored in a private Supabase **Storage** bucket
 policies scoping access to the uploader's organization. Deleting a document also removes
 its stored file.
 
-### 17. Streamlit Prototype
-The single-file [`app.py`](app.py) provides a self-contained demo of the entire engine:
-- Sidebar **user switcher** to act as any of the demo org members and see RBAC in action.
-- Drag-and-drop multi-file upload with shared/private toggle.
-- Live **email feed** panel with refresh.
-- **Indexed documents** list with type/visibility icons and visible-chunk count.
-- Chat interface with expandable **source references** and **conflict** cards.
-- **Clear all data** button. Backed by ChromaDB and the in-memory `org_model`.
-
 ---
 
 ## 🧰 Tech Stack
@@ -317,11 +306,12 @@ The single-file [`app.py`](app.py) provides a self-contained demo of the entire 
 - React Router 7
 - `@supabase/supabase-js`
 - react-markdown
+- Built to static assets, served by nginx in production
 
-**Prototype**
-- Streamlit
-- ChromaDB
-- PyMuPDF, pdfplumber, unstructured, NLTK
+**Packaging / Hosting**
+- Docker (backend + frontend images)
+- docker-compose (full-stack orchestration)
+- nginx (SPA serving + `/api` reverse proxy)
 
 ---
 
@@ -329,24 +319,23 @@ The single-file [`app.py`](app.py) provides a self-contained demo of the entire 
 
 ```
 ignisia26/
-├── app.py                      # Streamlit prototype (ChromaDB)
-├── main.py                     # Launcher → streamlit run app.py
-├── rag_ingestor.py             # FileIngestor — multi-format extraction & chunking
-├── rag_retriever.py            # RAGRetriever — ChromaDB search + grounded prompting
-├── conflict_detector.py        # ConflictDetector — heuristic + LLM conflict logic
-├── email_fetcher.py            # EmailFetcher — IMAP polling & ingestion
-├── org_model.py                # In-memory org hierarchy & RBAC (prototype)
-├── pdf_utils.py                # PDF page render + highlight (PyMuPDF)
-├── check_chunks.py             # Dev script: inspect chunking output
-├── test_semantic.py            # Dev script: test semantic chunking
-├── requirements.txt            # Prototype dependencies
+├── docker-compose.yml          # Full-stack orchestration (frontend + backend)
+├── .env.example                # Frontend build args for compose
 ├── architecture-diagram.html   # Interactive architecture diagram
 │
-├── backend/                    # Production FastAPI service
+├── backend/                    # ── Hostable component: FastAPI service ──
+│   ├── Dockerfile              # Backend image (bakes in the embedding model)
+│   ├── .dockerignore
+│   ├── .env.example            # Backend secrets template
 │   ├── main.py                 # App + CORS + router wiring + /api/health
-│   ├── config.py               # Settings (models, top_k, thresholds)
+│   ├── config.py               # Settings (models, top_k, thresholds, CORS)
 │   ├── dependencies.py         # JWT auth dependency
 │   ├── requirements.txt
+│   ├── engine/                 # ── Core RAG engine (storage-agnostic) ──
+│   │   ├── __init__.py         # Exports FileIngestor, ConflictDetector, EmailFetcher
+│   │   ├── rag_ingestor.py     # Multi-format extraction & format-aware chunking
+│   │   ├── conflict_detector.py# Heuristic + LLM conflict logic
+│   │   └── email_fetcher.py    # IMAP polling & ingestion
 │   ├── routers/
 │   │   ├── auth.py             # signup, login, me, org members
 │   │   ├── documents.py        # upload, list, delete
@@ -358,7 +347,11 @@ ignisia26/
 │       ├── embedding_service.py# Cached embedding model
 │       └── supabase_client.py  # Admin / user client factories
 │
-├── frontend/                   # React + Vite SPA
+├── frontend/                   # ── Hostable component: React + Vite SPA ──
+│   ├── Dockerfile              # Multi-stage build → nginx static server
+│   ├── nginx.conf              # SPA fallback + /api reverse proxy → backend
+│   ├── .dockerignore
+│   ├── .env.example            # VITE_SUPABASE_* build-time vars
 │   ├── vite.config.js          # Dev proxy /api → :8000
 │   ├── package.json
 │   └── src/
@@ -368,7 +361,7 @@ ignisia26/
 │       └── pages/              # Home, Auth, Dashboard, Upload, Email,
 │                               #   RaiseTicket, Tickets, ResolveTicket
 │
-└── supabase/
+└── supabase/                   # ── Hostable component: managed DB layer ──
     └── migrations/             # Schema, RLS, RPCs, triggers, demo seed data
 ```
 
@@ -465,39 +458,37 @@ cd ..
 2. Run the SQL migrations in `supabase/migrations/` **in order** (schema → seed).
 3. Grab your project URL, anon key, and service-role key.
 
-### 5. Streamlit prototype (optional)
-```bash
-pip install -r requirements.txt
-```
+> Prefer containers? Skip the manual venv/npm steps and jump straight to
+> [Deployment (Hostable Components)](#-deployment-hostable-components) — one
+> `docker compose up --build` brings up both components.
 
 ---
 
 ## 🔑 Environment Variables
 
-**Backend** (`.env` in project root or `backend/`):
+**Backend** (`backend/.env` — copy from [`backend/.env.example`](backend/.env.example)):
 ```env
 SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_ANON_KEY=your_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 OPENAI_API_KEY=sk-...
 
-# For ticket email sending (SMTP) and prototype email polling:
+# Comma-separated frontend origins allowed to call the API (CORS).
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+
+# Ticket email sending (SMTP) + IMAP email polling:
 EMAIL_ADDRESS=you@gmail.com
 EMAIL_PASSWORD=your_app_password
+EMAIL_IMAP_SERVER=imap.gmail.com
+EMAIL_FOLDER=INBOX
 ```
 
-**Frontend** (`frontend/.env`):
+**Frontend** (`frontend/.env` — copy from [`frontend/.env.example`](frontend/.env.example)).
+These are **build-time** values inlined into the bundle, so only ever use the public
+anon key here:
 ```env
 VITE_SUPABASE_URL=https://xxxx.supabase.co
 VITE_SUPABASE_ANON_KEY=your_anon_key
-```
-
-**Prototype email** (optional, in root `.env`):
-```env
-EMAIL_IMAP_SERVER=imap.gmail.com
-EMAIL_ADDRESS=you@gmail.com
-EMAIL_PASSWORD=your_app_password
-EMAIL_FOLDER=INBOX
 ```
 
 > For Gmail, use an [App Password](https://myaccount.google.com/apppasswords), not your
@@ -506,6 +497,8 @@ EMAIL_FOLDER=INBOX
 ---
 
 ## ▶️ Running the Application
+
+### Local development
 
 **Backend** (from `backend/`):
 ```bash
@@ -517,14 +510,68 @@ uvicorn main:app --reload --port 8000
 npm run dev    # Vite dev server on :5173, proxies /api → :8000
 ```
 
-Then open the Vite URL (default `http://localhost:5173`).
+Then open the Vite URL (default `http://localhost:5173`). API docs are served at
+`http://localhost:8000/docs`.
 
-**Streamlit prototype**:
-```bash
-streamlit run app.py
-# or
-python main.py
+On Windows you can also use the helper scripts from the project root:
+```powershell
+.\start_backend.ps1     # FastAPI on :8000
+.\start_frontend.ps1    # Vite on :5173
 ```
+
+---
+
+## 🚀 Deployment (Hostable Components)
+
+The app is split into independently deployable components so you can host them on
+any container platform (Render, Railway, Fly.io, AWS ECS, a VPS, etc.).
+
+| Component | Artifact | Listens on | Notes |
+|-----------|----------|-----------|-------|
+| **Backend** | `backend/Dockerfile` | `:8000` | Stateless API; needs `backend/.env` |
+| **Frontend** | `frontend/Dockerfile` | `:80` (nginx) | Static SPA + `/api` reverse proxy |
+| **Supabase** | managed service | — | Run the SQL migrations once |
+
+### Option A — Full stack with Docker Compose (one command)
+
+```bash
+cp backend/.env.example backend/.env     # fill in Supabase + OpenAI keys
+cp .env.example .env                      # frontend build args (VITE_SUPABASE_*)
+docker compose up --build
+```
+
+- Frontend → **http://localhost:8080** (this is the URL you use the app from)
+- Backend  → **http://localhost:8000** (direct API / `/docs`)
+
+The frontend container's nginx proxies `/api` → the backend container, so the SPA
+talks to the API over a single origin — no CORS issues in the browser.
+
+### Option B — Build & run the components separately
+
+**Backend:**
+```bash
+docker build -t ignisia26-backend ./backend
+docker run --env-file backend/.env -p 8000:8000 ignisia26-backend
+```
+
+**Frontend** (Vite inlines `VITE_*` at build time, so pass them as build args):
+```bash
+docker build -t ignisia26-frontend ./frontend \
+  --build-arg VITE_SUPABASE_URL=https://xxxx.supabase.co \
+  --build-arg VITE_SUPABASE_ANON_KEY=your_anon_key
+docker run -p 8080:80 ignisia26-frontend
+```
+
+### Hosting checklist
+
+1. **Supabase** — create the project, enable the `vector` + `uuid-ossp` extensions, and
+   run every file in `supabase/migrations/` in order.
+2. **Backend** — deploy the image with `backend/.env` values set. Point `CORS_ORIGINS`
+   at your real frontend URL (e.g. `https://app.example.com`).
+3. **Frontend** — build with the production `VITE_SUPABASE_*` values. If the frontend is
+   served from a different host than the backend, update the `/api` upstream in
+   [`frontend/nginx.conf`](frontend/nginx.conf) (or set your platform's proxy/rewrite
+   rule) to point at the backend's public URL.
 
 ---
 
@@ -543,9 +590,8 @@ hierarchy:
 Seed data also includes sample shared/private documents (PDF, DOCX, XLSX, EML — plus
 intentionally `processing` and `failed` records to exercise UI states), pre-populated
 conversations demonstrating clean answers, a duplicate-detection case, and a
-conflict-resolution case, an example email config, and audit-log history. The Streamlit
-prototype uses the same four users via `org_model.py` so you can switch identities and
-watch RBAC filter results live.
+conflict-resolution case, an example email config, and audit-log history. Log in as any
+of the four users to watch RBAC filter results live.
 
 ---
 

@@ -11,6 +11,16 @@ class Settings:
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
+    # Comma-separated list of allowed CORS origins (frontend URLs).
+    # Defaults to the local Vite/React dev servers.
+    CORS_ORIGINS: list[str] = [
+        o.strip()
+        for o in os.getenv(
+            "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
+        ).split(",")
+        if o.strip()
+    ]
+
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_DIM: int = 384
 

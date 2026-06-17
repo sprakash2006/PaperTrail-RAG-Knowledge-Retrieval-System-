@@ -7,6 +7,7 @@ from openai import OpenAI
 from config import settings
 from services.supabase_client import get_admin_client
 from services.embedding_service import embed_text, embed_batch
+from engine.conflict_detector import ConflictDetector
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +15,6 @@ logger = logging.getLogger(__name__)
 class RAGService:
     def __init__(self):
         self.gpt = OpenAI(api_key=settings.OPENAI_API_KEY)
-        import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
-        from conflict_detector import ConflictDetector
         self.conflict_detector = ConflictDetector(self.gpt)
 
 

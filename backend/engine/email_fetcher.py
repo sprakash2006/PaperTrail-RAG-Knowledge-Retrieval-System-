@@ -6,7 +6,7 @@ import email.policy
 import tempfile
 import logging
 from email.utils import parsedate_to_datetime
-from rag_ingestor import FileIngestor
+from engine.rag_ingestor import FileIngestor
 
 logger = logging.getLogger(__name__)
 

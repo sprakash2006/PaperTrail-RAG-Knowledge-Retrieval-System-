@@ -5,10 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from dependencies import get_current_user
 from services.rag_service import get_rag_service
 from services.supabase_client import get_admin_client
-
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
-from rag_ingestor import FileIngestor
+from engine.rag_ingestor import FileIngestor
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 ingestor = FileIngestor()

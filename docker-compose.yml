@@ -1,0 +1,36 @@
+# ──────────────────────────────────────────────────────────────
+# Ignisia26 — full stack (frontend + backend).
+# Supabase is a managed/external service; configure it via backend/.env.
+#
+#   1. cp backend/.env.example backend/.env   # fill in real values
+#   2. cp .env.example .env                   # frontend build args
+#   3. docker compose up --build
+#
+# Frontend → http://localhost:8080   (proxies /api to the backend)
+# Backend  → http://localhost:8000   (direct API access / docs at /docs)
+# ──────────────────────────────────────────────────────────────
+
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Read from the root .env file (see .env.example).
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

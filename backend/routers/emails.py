@@ -1,14 +1,12 @@
 
+import os
 import imaplib
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from dependencies import get_current_user
 from services.rag_service import get_rag_service
 from services.supabase_client import get_admin_client
-
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
-from email_fetcher import EmailFetcher
+from engine.email_fetcher import EmailFetcher
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
